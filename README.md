@@ -47,6 +47,55 @@ FSM.history cycled                       (* ["Red","Green","Yellow","Red"] *)
 val dot = FSM.toDot (fn s => s) light    (* "digraph fsm { ... }" *)
 ```
 
+#### Data-driven machines (`makeTable`)
+
+When you build the machine from an explicit transition table, the library can
+introspect it — render full edge diagrams, compute reachability, and validate
+the table. (A function-backed `make` machine cannot be introspected, so these
+operations treat it as edgeless.)
+
+```sml
+val light =
+  FSM.makeTable ["Red","Green","Yellow"] "Red"
+    [ ("Red",    "go",   "Green")
+    , ("Green",  "slow", "Yellow")
+    , ("Yellow", "stop", "Red") ]
+
+FSM.reachableStates light          (* ["Red","Green","Yellow"] from current *)
+FSM.validate light                 (* [] — every edge endpoint is declared *)
+val dot = FSM.toDotFull (fn s => s) (fn e => e) light  (* nodes AND labelled edges *)
+```
+
+#### History, reset, rewind, recognizers
+
+```sml
+val walked = FSM.sendAll light ["go","slow"]   (* Red -> Green -> Yellow *)
+FSM.reset walked                                (* back to "Red", history = ["Red"] *)
+valOf (FSM.rewind walked)                       (* step back to "Green" *)
+FSM.setHistoryLimit light 2                     (* keep only the 2 most recent states *)
+
+(* Treat the FSM as a recognizer over an accepting-state set. *)
+FSM.accepts walked ["Yellow"]                   (* true *)
+FSM.run light ["go","slow","stop"] ["Red"]      (* run word from start, accept? -> true *)
+```
+
+#### Mealy machines (`MealyFSM`)
+
+A separate structure for machines that emit an output on each transition (kept
+apart so `FSM`'s type and `send` are unchanged):
+
+```sml
+fun trans st ev =
+  case (st, ev) of
+      ("Idle", "coin")     => SOME ("Paid", "thanks")
+    | ("Paid", "dispense") => SOME ("Idle", "drink")
+    | _ => NONE
+
+val m = MealyFSM.make ["Idle","Paid"] "Idle" trans
+val (m', out) = MealyFSM.step m "coin"          (* state "Paid", out = SOME "thanks" *)
+MealyFSM.outputs m ["coin","dispense"]          (* ["thanks","drink"] *)
+```
+
 ### Behavior tree
 
 `tick` evaluates a tree against a context and returns `Success`, `Failure`, or
@@ -62,6 +111,11 @@ Additional composites and decorators:
   the child is `Running`).
 - `repeatUntilSuccess n t` retries `t` up to `n` times, stopping at the first
   `Success`.
+- `cooldown getTime lastFire period t` ticks `t` only once at least `period`
+  has elapsed since `lastFire`, otherwise returns `Failure`. `timeout getTime
+  startTime limit t` returns `Failure` once the elapsed time from `startTime`
+  exceeds `limit`. Because `tick` is stateless, both read the current time from
+  the context via a `getTime` accessor (e.g. a clock field on the context).
 
 ```sml
 open BehaviorTree
@@ -82,14 +136,20 @@ val any2 = parallel 2 [scanLeft, scanRight, scanAhead]
 ## Scope and limitations
 
 - FSM states and events use SML equality types; states must be comparable with
-  `=` (so no function-typed states). The transition function is the single
-  source of truth — `toDot` renders declared *nodes* but not edges (it has no
-  way to enumerate every event).
-- `history` grows unbounded as events are sent; trim it in long-running loops if
-  memory matters. No-op events (transition returns `NONE`) are not recorded.
+  `=` (so no function-typed states). For a `make` machine the transition
+  function is the single source of truth — `toDot` renders declared *nodes* but
+  not edges (it cannot enumerate every event). Use `makeTable` when you want
+  `toDotFull`/`reachableStates`/`validate`, which operate over the explicit
+  table; on a function-backed machine they behave as if there were no edges.
+- `history` grows unbounded by default; call `setHistoryLimit` to cap it in
+  long-running loops. No-op events (transition returns `NONE`) are not recorded.
+  `rewind` steps back over recorded *states* only — events are not stored.
+- `MealyFSM` is a separate structure from `FSM`; its `step` returns the new
+  machine plus an optional emitted output.
 - Behavior-tree `tick` is a single synchronous evaluation; `Running` is reported
   but there is no built-in scheduler/blackboard — the caller drives re-ticking
-  and owns all mutable context.
+  and owns all mutable context. `cooldown`/`timeout` are stateless and read the
+  clock from the context, so the caller must supply the current time.
 - Everything is pure/allocation-light and single-threaded; concurrency is out of
   scope.
 
