@@ -103,6 +103,52 @@ struct
       val rB = tick aiTree {inRange = false, log = logB}
       val () = Harness.checkBool "enemy not in range -> Success" (true, rB = Success)
       val () = Harness.checkString "enemy not in range -> patrol" ("patrol", !logB)
+
+      (* Section 7: FSM new API *)
+      val () = Harness.section "FSM canSend / states / sendAll / history / toDot"
+      val tc = traffic ()
+      val () = Harness.checkBool "canSend go true" (true, FSM.canSend tc "go")
+      val () = Harness.checkBool "canSend stop false" (false, FSM.canSend tc "stop")
+      val () = Harness.checkStringList "states declared"
+                 (["Red","Green","Yellow"], FSM.states tc)
+      val tAll = FSM.sendAll tc ["go","slow","stop"]
+      val () = Harness.checkString "sendAll cycles back to Red" ("Red", FSM.current tAll)
+      val () = Harness.checkStringList "history records path"
+                 (["Red","Green","Yellow","Red"], FSM.history tAll)
+      val tBad = FSM.sendAll tc ["stop","stop"]
+      val () = Harness.checkStringList "history ignores no-op events"
+                 (["Red"], FSM.history tBad)
+      val dot = FSM.toDot (fn s => s) tc
+      val () = Harness.checkBool "dot contains Red" (true, String.isSubstring "Red" dot)
+      val () = Harness.checkBool "dot marks current"
+                 (true, String.isSubstring "peripheries=2" dot)
+      val () = Harness.checkBool "dot is digraph" (true, String.isPrefix "digraph" dot)
+
+      (* Section 8: BT parallel / succeeder / failer / repeatUntilSuccess *)
+      val () = Harness.section "BT parallel and decorators"
+      val () = Harness.checkBool "parallel 2 of [s,s,f] -> Success"
+                 (true, tick (parallel 2 [succ, succ, fail]) () = Success)
+      val () = Harness.checkBool "parallel 3 of [s,s,f] -> Failure"
+                 (true, tick (parallel 3 [succ, succ, fail]) () = Failure)
+      val () = Harness.checkBool "parallel 0 -> Success"
+                 (true, tick (parallel 0 [fail, fail]) () = Success)
+      val () = Harness.checkBool "succeeder fail -> Success"
+                 (true, tick (succeeder fail) () = Success)
+      val () = Harness.checkBool "failer succ -> Failure"
+                 (true, tick (failer succ) () = Failure)
+      val running = action (fn _ => Running)
+      val () = Harness.checkBool "succeeder running -> Running"
+                 (true, tick (succeeder running) () = Running)
+      (* repeatUntilSuccess: action that fails twice then succeeds *)
+      val attempts = ref 0
+      val failTwice = action (fn (r: int ref) =>
+                        (r := !r + 1; if !r >= 3 then Success else Failure))
+      val () = Harness.checkBool "repeatUntilSuccess 5 eventually Success"
+                 (true, tick (repeatUntilSuccess 5 failTwice) attempts = Success)
+      val attempts2 = ref 0
+      val alwaysFail = action (fn (r: int ref) => (r := !r + 1; Failure))
+      val () = Harness.checkBool "repeatUntilSuccess 2 of alwaysFail -> Failure"
+                 (true, tick (repeatUntilSuccess 2 alwaysFail) attempts2 = Failure)
     in
       Harness.run ()
     end
